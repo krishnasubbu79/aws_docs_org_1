@@ -1,12 +1,12 @@
 # AWS Root Account Security & Break-Glass Strategy (Audit-Ready)
 
-**Applies to: All Accounts in Data Bunker AWS Organization**
+**Applies to: All Accounts in Secure AWS Organization**
 
 ---
 
 ## 1. Purpose
 
-This document defines the **mandatory, audit-compliant controls** for securing AWS root accounts and implementing a **break-glass access mechanism** across all accounts in the Data Bunker Organization.
+This document defines the **mandatory, audit-compliant controls** for securing AWS root accounts and implementing a **break-glass access mechanism** across all accounts in the Secure AWS Organization.
 
 The objectives are to:
 
