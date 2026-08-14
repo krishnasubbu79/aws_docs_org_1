@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AWS Backup Cost Calculator</title>
+<style>
+  :root{
+    --bg:#0f1720; --panel:#161f2b; --panel2:#1d2836; --line:#2a3644;
+    --text:#e6edf3; --muted:#93a1b0; --accent:#2dd4bf; --accent2:#38bdf8;
+    --warn:#fbbf24; --good:#34d399; --danger:#f87171;
+    --shadow:0 1px 3px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.25);
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#f4f7fa; --panel:#ffffff; --panel2:#f0f4f8; --line:#dbe3ec;
+      --text:#0f2133; --muted:#5b6b7b; --accent:#0d9488; --accent2:#0284c7;
+      --warn:#b45309; --good:#047857; --danger:#dc2626;
+      --shadow:0 1px 2px rgba(16,33,51,.06),0 10px 30px rgba(16,33,51,.08);
+    }
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.5; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1180px; margin:0 auto; padding:28px 20px 64px}
+  header h1{font-size:1.55rem; margin:0 0 4px; letter-spacing:-.02em}
+  header p{color:var(--muted); margin:0; font-size:.95rem}
+  .grid{display:grid; grid-template-columns:400px 1fr; gap:22px; margin-top:24px}
+  @media (max-width:920px){ .grid{grid-template-columns:1fr} }
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow)}
+  .card .hd{padding:14px 18px; border-bottom:1px solid var(--line); font-weight:650; font-size:.95rem; display:flex; align-items:center; gap:8px}
+  .card .bd{padding:18px}
+  label{display:block; font-size:.82rem; color:var(--muted); margin:0 0 5px; font-weight:600}
+  .field{margin-bottom:16px}
+  .row{display:flex; gap:10px}
+  .row > *{flex:1}
+  input[type=number], select{
+    width:100%; background:var(--panel2); color:var(--text);
+    border:1px solid var(--line); border-radius:9px; padding:10px 11px; font-size:.95rem; font-variant-numeric:tabular-nums;
+  }
+  input[type=number]:focus, select:focus{outline:2px solid var(--accent); outline-offset:1px; border-color:transparent}
+  .seg{display:flex; background:var(--panel2); border:1px solid var(--line); border-radius:9px; overflow:hidden}
+  .seg button{flex:1; background:transparent; color:var(--muted); border:0; padding:9px 8px; font-size:.85rem; cursor:pointer; font-weight:600}
+  .seg button.on{background:var(--accent); color:#04231f}
+  @media (prefers-color-scheme: light){ .seg button.on{color:#fff} }
+  input[type=range]{width:100%; accent-color:var(--accent)}
+  .hint{font-size:.75rem; color:var(--muted); margin-top:5px; line-height:1.45}
+  details.adv{margin-top:6px; border-top:1px dashed var(--line); padding-top:12px}
+  details.adv summary{cursor:pointer; font-weight:650; font-size:.88rem; color:var(--accent2); list-style:none}
+  details.adv summary::-webkit-details-marker{display:none}
+  details.adv summary::before{content:"▸ "; }
+  details.adv[open] summary::before{content:"▾ "; }
+  .toggle{display:flex; align-items:center; gap:9px; margin-bottom:12px; font-size:.88rem; color:var(--text); font-weight:600}
+  .toggle input{width:16px; height:16px; accent-color:var(--accent)}
+
+  .answer{background:linear-gradient(135deg,var(--panel2),var(--panel)); border:1px solid var(--accent); border-radius:12px; padding:16px 18px; margin-bottom:18px}
+  .answer .q{font-size:.8rem; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; font-weight:700}
+  .answer .a{font-size:1.35rem; font-weight:750; margin-top:4px; letter-spacing:-.01em}
+  .answer .a small{font-size:.85rem; color:var(--muted); font-weight:600}
+
+  .stats{display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:18px}
+  @media (max-width:640px){ .stats{grid-template-columns:repeat(2,1fr)} }
+  .stat{background:var(--panel2); border:1px solid var(--line); border-radius:11px; padding:13px 14px}
+  .stat .k{font-size:.72rem; color:var(--muted); font-weight:650; text-transform:uppercase; letter-spacing:.04em}
+  .stat .v{font-size:1.28rem; font-weight:750; margin-top:3px; font-variant-numeric:tabular-nums; letter-spacing:-.01em}
+  .stat .s{font-size:.72rem; color:var(--muted); margin-top:2px}
+
+  .chartwrap{position:relative}
+  canvas{width:100%; display:block}
+  .legend{display:flex; gap:16px; font-size:.78rem; color:var(--muted); margin:8px 2px 0}
+  .legend span{display:inline-flex; align-items:center; gap:6px}
+  .dot{width:11px; height:11px; border-radius:3px; display:inline-block}
+
+  table{width:100%; border-collapse:collapse; font-size:.85rem; font-variant-numeric:tabular-nums}
+  th,td{padding:8px 10px; text-align:right; border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left}
+  thead th{color:var(--muted); font-size:.73rem; text-transform:uppercase; letter-spacing:.04em; position:sticky; top:0; background:var(--panel)}
+  tbody tr:hover{background:var(--panel2)}
+  .tablescroll{max-height:340px; overflow:auto; border:1px solid var(--line); border-radius:11px}
+  tr.milestone td{background:color-mix(in srgb,var(--accent) 12%, transparent); font-weight:650}
+
+  .note{font-size:.78rem; color:var(--muted); margin-top:14px; line-height:1.55; background:var(--panel2); border:1px solid var(--line); border-left:3px solid var(--warn); border-radius:8px; padding:11px 13px}
+  .note b{color:var(--text)}
+  .foot{margin-top:22px; font-size:.75rem; color:var(--muted); line-height:1.6}
+  .foot code{background:var(--panel2); padding:1px 5px; border-radius:4px; font-size:.9em}
+  .pillrow{display:flex; flex-wrap:wrap; gap:6px; margin-top:4px}
+  .pill{font-size:.72rem; padding:3px 9px; border-radius:20px; background:var(--panel2); border:1px solid var(--line); color:var(--muted); cursor:pointer}
+  .pill:hover{border-color:var(--accent); color:var(--text)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>AWS Backup Cost Calculator</h1>
+    <p>Warm-storage cost for snapshots in a backup vault — accrued per passing day, prorated to the hour like AWS bills it.</p>
+  </header>
+
+  <div class="grid">
+    <!-- ============ INPUTS ============ -->
+    <div class="card">
+      <div class="hd">⚙️ Inputs</div>
+      <div class="bd">
+
+        <div class="field">
+          <label for="resType">Resource type (sets default rate)</label>
+          <select id="resType"></select>
+          <div class="hint" id="resHint"></div>
+        </div>
+
+        <div class="field">
+          <label for="rate">Warm storage rate — $ / GB-month <span title="Editable. Defaults are US East (N. Virginia). Other regions run higher.">ⓘ</span></label>
+          <input type="number" id="rate" step="0.001" min="0" value="0.05">
+          <div class="pillrow">
+            <span class="pill" data-region="0.05">us-east-1 ($0.05)</span>
+            <span class="pill" data-region="0.055">eu-west-1 ($0.055)</span>
+            <span class="pill" data-region="0.06">ap-south-1 ($0.06)</span>
+            <span class="pill" data-region="0.10">DynamoDB ($0.10)</span>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Initial backup size (first full snapshot)</label>
+          <div class="row">
+            <input type="number" id="size" min="0" step="1" value="100">
+            <select id="sizeUnit" style="flex:0 0 90px">
+              <option value="TB" selected>TB</option>
+              <option value="PB">PB</option>
+              <option value="GB">GB</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>1 TB equals</label>
+          <div class="seg" id="tbSeg">
+            <button data-gb="1024" class="on">1024 GB (binary)</button>
+            <button data-gb="1000">1000 GB (decimal)</button>
+          </div>
+          <div class="hint">AWS meters snapshot storage in binary GB (GiB). Keep <b>1024</b> unless you're matching a decimal quote.</div>
+        </div>
+
+        <div class="field">
+          <label for="change">Daily change rate — <span id="changeVal">0%</span> of data / day</label>
+          <input type="range" id="change" min="0" max="20" step="0.5" value="0">
+          <div class="hint">How much data changes each day, added as an <b>incremental</b> backup. Set <b>0%</b> for a single fresh snapshot you just hold (your 100 TB → 7 days case).</div>
+        </div>
+
+        <div class="field">
+          <label for="retention">Retention (days snapshots are kept)</label>
+          <input type="number" id="retention" min="1" step="1" value="7">
+          <div class="hint">Snapshots older than this are deleted, freeing their storage.</div>
+        </div>
+
+        <div class="field">
+          <label for="daysInMonth">Days in month (for proration)</label>
+          <input type="number" id="daysInMonth" min="28" max="31" step="1" value="30">
+          <div class="hint">AWS prorates by actual calendar days. 30 is a clean average.</div>
+        </div>
+
+        <details class="adv">
+          <summary>Advanced: cold tier & cross-region copy</summary>
+          <div style="margin-top:14px">
+            <label class="toggle"><input type="checkbox" id="coldOn"> Move to cold storage after N days</label>
+            <div class="row" id="coldRow" style="opacity:.5">
+              <div><label for="coldAfter">After (days)</label><input type="number" id="coldAfter" min="1" value="30"></div>
+              <div><label for="coldRate">Cold $ / GB-mo</label><input type="number" id="coldRate" step="0.001" min="0" value="0.01"></div>
+            </div>
+            <div class="hint" style="margin-bottom:14px">Cold storage supports EBS, EFS, DynamoDB, VMware. Has a 90-day minimum-retention charge — not modeled here.</div>
+
+            <label class="toggle"><input type="checkbox" id="copyOn"> Copy each backup to a second region</label>
+            <div class="row" id="copyRow" style="opacity:.5">
+              <div><label for="copyTransfer">Transfer $ / GB (one-time)</label><input type="number" id="copyTransfer" step="0.001" min="0" value="0.02"></div>
+              <div><label for="copyStore">2nd-region $ / GB-mo</label><input type="number" id="copyStore" step="0.001" min="0" value="0.05"></div>
+            </div>
+          </div>
+        </details>
+
+      </div>
+    </div>
+
+    <!-- ============ RESULTS ============ -->
+    <div>
+      <div class="answer">
+        <div class="q">Your scenario</div>
+        <div class="a" id="headline">—</div>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><div class="k">Cost / day (initial)</div><div class="v" id="sDay">—</div><div class="s" id="sDaySub">while full backup sits</div></div>
+        <div class="stat"><div class="k">Total over retention</div><div class="v" id="sTotal">—</div><div class="s" id="sTotalSub">—</div></div>
+        <div class="stat"><div class="k">Monthly (steady state)</div><div class="v" id="sMonth">—</div><div class="s" id="sMonthSub">at plateau storage</div></div>
+        <div class="stat"><div class="k">Peak storage</div><div class="v" id="sPeak">—</div><div class="s" id="sPeakSub">—</div></div>
+      </div>
+
+      <div class="card">
+        <div class="hd">📈 Cost & storage over time</div>
+        <div class="bd">
+          <div class="chartwrap"><canvas id="chart" height="300"></canvas></div>
+          <div class="legend">
+            <span><i class="dot" style="background:var(--accent2)"></i> Cumulative cost ($)</span>
+            <span><i class="dot" style="background:var(--accent)"></i> Stored data (TB)</span>
+            <span><i class="dot" style="background:var(--muted)"></i> Retention edge</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:18px">
+        <div class="hd">📋 Day-by-day breakdown</div>
+        <div class="bd">
+          <div class="tablescroll">
+            <table>
+              <thead><tr><th>Day</th><th>Stored</th><th>Snapshots</th><th>Cost that day</th><th>Cumulative</th></tr></thead>
+              <tbody id="tbody"></tbody>
+            </table>
+          </div>
+          <div class="note" id="modelNote"></div>
+        </div>
+      </div>
+
+      <div class="foot">
+        <b>The math.</b> Warm storage bills at <code>$/GB-month</code>, prorated by time. Daily cost = <code>stored_GB × rate ÷ days_in_month</code>. A snapshot held part of a month costs that fraction of its GB-month price. <b>Incremental snapshots</b> mean the first backup stores the full used size; each later backup stores only changed blocks (<code>size × daily-change-rate</code>). This tool uses a simple additive model: storage = initial full baseline + retained daily deltas. Real chains can free slightly less when a mid-chain snapshot is deleted (blocks still referenced by newer snapshots are kept), so actual cost is typically at or slightly above this estimate. Restore, PUT/GET request, and cross-region data-transfer-out charges are separate. Rates are US East (N. Virginia) defaults — override for your region. Verify against the <a href="https://aws.amazon.com/backup/pricing/" style="color:var(--accent2)">AWS Backup pricing page</a> before committing budget.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const RES = [
+  {id:"ebs",   name:"Amazon EBS snapshot",  rate:0.05,  hint:"Incremental block-level snapshots. First is full, rest store changed blocks."},
+  {id:"efs",   name:"Amazon EFS",           rate:0.05,  hint:"Warm $0.05, cold $0.01 per GB-month."},
+  {id:"rds",   name:"Amazon RDS",           rate:0.095, hint:"$0.095/GB-mo beyond the free backup equal to your DB size."},
+  {id:"aurora",name:"Amazon Aurora",        rate:0.021, hint:"Continuous/snapshot backup storage."},
+  {id:"ddb",   name:"Amazon DynamoDB",      rate:0.10,  hint:"On-demand backup warm $0.10, cold ~$0.03 per GB-month."},
+  {id:"s3",    name:"Amazon S3",            rate:0.05,  hint:"Plus per-object request charges, not modeled."},
+  {id:"fsx",   name:"Amazon FSx",           rate:0.05,  hint:"Warm storage per GB-month."},
+  {id:"vmware",name:"VMware / on-prem",     rate:0.05,  hint:"Warm $0.05, cold $0.01 per GB-month."},
+  {id:"custom",name:"Custom / other",       rate:0.05,  hint:"Enter your own rate below."}
+];
+
+const $ = id => document.getElementById(id);
+let gbPerTB = 1024;
+
+// populate resource dropdown
+const sel = $("resType");
+RES.forEach(r => { const o=document.createElement("option"); o.value=r.id; o.textContent=`${r.name} — $${r.rate}/GB-mo`; sel.appendChild(o); });
+sel.value = "ebs";
+
+function fmtMoney(n){
+  if(!isFinite(n)) return "—";
+  if(n>=1e6) return "$"+(n/1e6).toFixed(2)+"M";
+  if(n>=1000) return "$"+n.toLocaleString(undefined,{maximumFractionDigits:0});
+  if(n>=10) return "$"+n.toLocaleString(undefined,{maximumFractionDigits:2});
+  return "$"+n.toLocaleString(undefined,{maximumFractionDigits:3});
+}
+function fmtTB(gb){
+  const tb = gb/gbPerTB;
+  if(tb>=1000) return (tb/1000).toFixed(2)+" PB";
+  if(tb>=1) return tb.toFixed(tb<10?2:1)+" TB";
+  return gb.toLocaleString(undefined,{maximumFractionDigits:0})+" GB";
+}
+
+function initialGB(){
+  const v = parseFloat($("size").value)||0;
+  const u = $("sizeUnit").value;
+  if(u==="PB") return v*gbPerTB*1024;
+  if(u==="GB") return v;
+  return v*gbPerTB; // TB
+}
+
+// Build the storage/cost time series
+function simulate(){
+  const S0 = initialGB();
+  const rate = parseFloat($("rate").value)||0;
+  const chg = (parseFloat($("change").value)||0)/100;
+  const R = Math.max(1, Math.round(parseFloat($("retention").value)||1));
+  const dim = Math.max(1, parseFloat($("daysInMonth").value)||30);
+  const delta = S0*chg;
+
+  const coldOn = $("coldOn").checked;
+  const coldAfter = Math.max(1, parseFloat($("coldAfter").value)||30);
+  const coldRate = parseFloat($("coldRate").value)||0;
+  const copyOn = $("copyOn").checked;
+  const copyTransfer = parseFloat($("copyTransfer").value)||0;
+  const copyStore = parseFloat($("copyStore").value)||0;
+
+  // horizon: show enough to reach plateau + a little past retention, min 14, max 120
+  const horizon = Math.min(120, Math.max(14, R + Math.min(R,14) + 2));
+
+  // Track each snapshot: {day created, size}
+  // day 0: full. day i>=1: incremental delta (only if change rate > 0)
+  const snaps = [];
+  const rows = [];
+  let cum = 0;
+
+  for(let day=0; day<=horizon; day++){
+    // create snapshot at start of this day
+    if(day===0) snaps.push({born:0, size:S0});
+    else if(delta>0) snaps.push({born:day, size:delta});
+
+    // expire snapshots older than retention (age >= R means kept for R days, deleted after)
+    const live = snaps.filter(s => (day - s.born) < R);
+
+    // storage split warm/cold
+    let warm=0, cold=0;
+    for(const s of live){
+      const age = day - s.born;
+      if(coldOn && age >= coldAfter) cold += s.size; else warm += s.size;
+    }
+    const stored = warm+cold;
+
+    // per-day cost (prorated: rate is per-GB-MONTH, so ÷ days_in_month)
+    let dayCost = (warm*rate + cold*coldRate)/dim;
+    // second-region ongoing storage (assume warm rate in copy region, same live set)
+    if(copyOn) dayCost += stored*copyStore/dim;
+    // one-time transfer cost when a snapshot is created (charged on its birth day)
+    if(copyOn){
+      const bornToday = snaps.filter(s=>s.born===day).reduce((a,s)=>a+s.size,0);
+      dayCost += bornToday*copyTransfer;
+    }
+    cum += dayCost;
+    rows.push({day, stored, count:live.length, dayCost, cum, warm, cold});
+  }
+  return {rows, S0, rate, delta, R, dim, chg, horizon};
+}
+
+function render(){
+  const sim = simulate();
+  const {rows, S0, rate, delta, R, dim, chg} = sim;
+
+  // headline
+  const held = rows.filter(r=>r.day>=1 && r.day<=R);
+  const totalRetention = rows.filter(r=>r.day<R).reduce((a,r)=>a+r.dayCost,0); // cost while first backup lives (days 0..R-1)
+  const day0cost = rows[0].dayCost;
+  const sizeLabel = fmtTB(S0);
+  const flat = chg===0;
+
+  $("headline").innerHTML = flat
+    ? `${sizeLabel} held for <b>${R} day${R>1?'s':''}</b> = <b>${fmtMoney(totalRetention)}</b> <small>(warm storage)</small>`
+    : `${sizeLabel} + ${(chg*100).toFixed(1)}%/day incrementals, ${R}-day retention`;
+
+  // stats
+  $("sDay").textContent = fmtMoney(day0cost);
+  $("sDaySub").textContent = `${fmtTB(S0)} × $${rate}/GB-mo ÷ ${dim}`;
+
+  $("sTotal").textContent = fmtMoney(totalRetention);
+  $("sTotalSub").textContent = `${R} day${R>1?'s':''} held`;
+
+  // steady-state plateau storage = last row's stored once past first retention cycle, or peak
+  const peak = rows.reduce((m,r)=>Math.max(m,r.stored),0);
+  const plateauRow = rows[Math.min(rows.length-1, R+ (chg>0? R:0))] || rows[rows.length-1];
+  const plateauStored = chg>0 ? peak : S0;
+  $("sMonth").textContent = fmtMoney(plateauStored*rate);
+  $("sMonthSub").textContent = `${fmtTB(plateauStored)} held a full month`;
+
+  $("sPeak").textContent = fmtTB(peak);
+  $("sPeakSub").textContent = chg>0 ? `full + ${R}×${(chg*100).toFixed(1)}% deltas` : `single snapshot`;
+
+  // table
+  const tb = $("tbody"); tb.innerHTML="";
+  rows.forEach(r=>{
+    const tr=document.createElement("tr");
+    if(r.day===0 || r.day===R || r.day===7) tr.className="milestone";
+    tr.innerHTML = `<td>Day ${r.day}${r.day===0?" · full":""}${r.day===R?" · 1st expiry":""}</td>
+      <td>${fmtTB(r.stored)}</td><td>${r.count}</td>
+      <td>${fmtMoney(r.dayCost)}</td><td>${fmtMoney(r.cum)}</td>`;
+    tb.appendChild(tr);
+  });
+
+  // model note
+  $("modelNote").innerHTML = flat
+    ? `<b>Single-snapshot mode.</b> Storage stays flat at ${fmtTB(S0)} for ${R} days, then the snapshot expires and cost stops. Each day costs the same ${fmtMoney(day0cost)}.`
+    : `<b>Incremental mode.</b> Storage climbs by ${fmtTB(delta)}/day until day ${R}, then holds near ${fmtTB(peak)} as old deltas expire. Rows highlighted at day 0 (first full), day 7, and day ${R} (first expiry).`;
+
+  drawChart(rows, R);
+}
+
+function drawChart(rows, R){
+  const cv=$("chart"); const dpr=window.devicePixelRatio||1;
+  const W=cv.clientWidth, H=300;
+  cv.width=W*dpr; cv.height=H*dpr;
+  const ctx=cv.getContext("2d"); ctx.scale(dpr,dpr);
+  ctx.clearRect(0,0,W,H);
+  const cs=getComputedStyle(document.documentElement);
+  const cAccent=cs.getPropertyValue('--accent').trim();
+  const cAccent2=cs.getPropertyValue('--accent2').trim();
+  const cLine=cs.getPropertyValue('--line').trim();
+  const cMut=cs.getPropertyValue('--muted').trim();
+
+  const padL=54,padR=54,padT=16,padB=28;
+  const plotW=W-padL-padR, plotH=H-padT-padB;
+  const n=rows.length;
+  const maxCum=Math.max(...rows.map(r=>r.cum),1);
+  const maxStore=Math.max(...rows.map(r=>r.stored),1);
+  const x=i=> padL + (n<=1?0:(i/(n-1))*plotW);
+  const yCum=v=> padT+plotH-(v/maxCum)*plotH;
+  const yStore=v=> padT+plotH-(v/maxStore)*plotH;
+
+  // gridlines
+  ctx.strokeStyle=cLine; ctx.lineWidth=1; ctx.fillStyle=cMut; ctx.font="11px -apple-system,sans-serif";
+  for(let g=0; g<=4; g++){
+    const yy=padT+plotH-(g/4)*plotH;
+    ctx.globalAlpha=.5; ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke(); ctx.globalAlpha=1;
+    ctx.textAlign="right"; ctx.fillStyle=cAccent2;
+    ctx.fillText("$"+(maxCum*g/4>=1000?((maxCum*g/4)/1000).toFixed(1)+"k":(maxCum*g/4).toFixed(0)), padL-8, yy+4);
+    ctx.textAlign="left"; ctx.fillStyle=cAccent;
+    ctx.fillText((maxStore*g/4/gbPerTB).toFixed(maxStore/gbPerTB<10?1:0)+"TB", W-padR+8, yy+4);
+  }
+  // retention edge marker
+  if(R < n){
+    const xr=x(R); ctx.strokeStyle=cMut; ctx.setLineDash([4,4]); ctx.globalAlpha=.7;
+    ctx.beginPath(); ctx.moveTo(xr,padT); ctx.lineTo(xr,padT+plotH); ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha=1;
+    ctx.fillStyle=cMut; ctx.textAlign="center"; ctx.fillText("day "+R, xr, padT+plotH+18);
+  }
+  ctx.fillStyle=cMut; ctx.textAlign="center";
+  ctx.fillText("day 0", x(0)+6, padT+plotH+18);
+  ctx.fillText("day "+(n-1), x(n-1)-6, padT+plotH+18);
+
+  // stored area (accent)
+  ctx.beginPath(); ctx.moveTo(x(0),yStore(rows[0].stored));
+  rows.forEach((r,i)=>ctx.lineTo(x(i),yStore(r.stored)));
+  ctx.lineTo(x(n-1),padT+plotH); ctx.lineTo(x(0),padT+plotH); ctx.closePath();
+  ctx.fillStyle=cAccent+"22"; ctx.fill();
+  ctx.beginPath(); rows.forEach((r,i)=> i?ctx.lineTo(x(i),yStore(r.stored)):ctx.moveTo(x(i),yStore(r.stored)));
+  ctx.strokeStyle=cAccent; ctx.lineWidth=2; ctx.stroke();
+
+  // cumulative cost line (accent2)
+  ctx.beginPath(); rows.forEach((r,i)=> i?ctx.lineTo(x(i),yCum(r.cum)):ctx.moveTo(x(i),yCum(r.cum)));
+  ctx.strokeStyle=cAccent2; ctx.lineWidth=2.5; ctx.stroke();
+  // dots at day 7 & R
+  [7,R].forEach(d=>{ if(d<n){ ctx.beginPath(); ctx.arc(x(d),yCum(rows[d].cum),3.5,0,7); ctx.fillStyle=cAccent2; ctx.fill(); }});
+}
+
+// ---- wiring ----
+function onResChange(){
+  const r=RES.find(x=>x.id===sel.value);
+  $("rate").value=r.rate; $("resHint").textContent=r.hint;
+}
+sel.addEventListener("change", ()=>{onResChange(); render();});
+$("change").addEventListener("input", ()=>{ $("changeVal").textContent=(parseFloat($("change").value)).toFixed(1)+"%"; render();});
+["rate","size","sizeUnit","retention","daysInMonth","coldOn","coldAfter","coldRate","copyOn","copyTransfer","copyStore"].forEach(id=>{
+  $(id).addEventListener("input", render);
+});
+document.querySelectorAll("#tbSeg button").forEach(b=> b.addEventListener("click",()=>{
+  document.querySelectorAll("#tbSeg button").forEach(x=>x.classList.remove("on"));
+  b.classList.add("on"); gbPerTB=parseInt(b.dataset.gb); render();
+}));
+document.querySelectorAll(".pill").forEach(p=> p.addEventListener("click",()=>{ $("rate").value=p.dataset.region; render(); }));
+$("coldOn").addEventListener("change",()=> $("coldRow").style.opacity=$("coldOn").checked?1:.5);
+$("copyOn").addEventListener("change",()=> $("copyRow").style.opacity=$("copyOn").checked?1:.5);
+window.addEventListener("resize", render);
+
+onResChange(); render();
+</script>
+</body>
+</html>
