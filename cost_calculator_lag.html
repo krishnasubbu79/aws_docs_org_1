@@ -198,6 +198,12 @@
               <div><label for="copyTransfer">Transfer $ / GB (one-time)</label><input type="number" id="copyTransfer" step="0.001" min="0" value="0.02"></div>
               <div><label for="copyStore">2nd-region $ / GB-mo</label><input type="number" id="copyStore" step="0.001" min="0" value="0.05"></div>
             </div>
+
+            <label class="toggle" style="margin-top:14px"><input type="checkbox" id="stopOn"> Backups stop after a set day (source retired / no more change)</label>
+            <div class="row" id="stopRow" style="opacity:.5">
+              <div><label for="stopDay">Stop new backups after day</label><input type="number" id="stopDay" min="0" value="30"></div>
+            </div>
+            <div class="hint">After this day no new recovery points are created. Existing ones expire over the next <b>retention</b> days, so storage — and cost — drain to <b>$0</b>. Leave off for an ongoing plan (storage plateaus and holds).</div>
           </div>
         </details>
 
@@ -339,8 +345,15 @@ function simulate(){
   const copyTransfer = parseFloat($("copyTransfer").value)||0;
   const copyStore = parseFloat($("copyStore").value)||0;
 
-  // horizon: show enough to reach plateau + a little past retention, min 14, max 120
-  const horizon = Math.min(120, Math.max(14, R + Math.min(R,14) + 2));
+  // "backups stop after day N" → after this day no new recovery points; storage then
+  // drains to $0 as the last points expire (source retired / no more change captured).
+  const stopOn = $("stopOn").checked;
+  const stopDay = stopOn ? Math.max(0, Math.round(parseFloat($("stopDay").value)||0)) : Infinity;
+
+  // horizon: reach plateau + past retention; if backups stop, run long enough to hit $0
+  const horizon = stopOn
+    ? Math.min(365, stopDay + R + 3)
+    : Math.min(120, Math.max(14, R + Math.min(R,14) + 2));
 
   // Track each snapshot: {day created, size}
   // day 0: full. day i>=1: incremental delta (only if change rate > 0)
@@ -349,12 +362,16 @@ function simulate(){
   let cum = 0;
 
   for(let day=0; day<=horizon; day++){
-    // create snapshot at start of this day
-    if(day===0) snaps.push({born:0, size:S0});
-    else if(delta>0) snaps.push({born:day, size:delta});
+    // create snapshot at start of this day, but only while backups are still running
+    if(day<=stopDay){
+      if(day===0) snaps.push({born:0, size:S0});
+      else if(delta>0) snaps.push({born:day, size:delta});
+    }
 
-    // expire snapshots older than retention (age >= R means kept for R days, deleted after)
-    const live = snaps.filter(s => (day - s.born) < R);
+    // The day-0 full is a persistent baseline while incrementals keep referencing it —
+    // it stays until R days after the LAST backup, then the whole chain drains to zero.
+    const lastBk = Math.min(day, stopDay);
+    const live = snaps.filter(s => (s.born===0 && delta>0) ? ((day - lastBk) < R) : ((day - s.born) < R));
 
     // storage split warm/cold
     let warm=0, cold=0;
@@ -376,7 +393,7 @@ function simulate(){
     cum += dayCost;
     rows.push({day, stored, count:live.length, dayCost, cum, warm, cold});
   }
-  return {rows, S0, rate, delta, R, dim, chg, horizon};
+  return {rows, S0, rate, delta, R, dim, chg, horizon, stopOn, stopDay};
 }
 
 function render(){
@@ -477,16 +494,19 @@ function render(){
   rows.forEach(r=>{
     const tr=document.createElement("tr");
     if(r.day===0 || r.day===R || r.day===7) tr.className="milestone";
-    tr.innerHTML = `<td>Day ${r.day}${r.day===0?" · full":""}${r.day===R?" · 1st expiry":""}</td>
+    tr.innerHTML = `<td>Day ${r.day}${r.day===0?" · full":""}${r.day===R?(flat?" · expiry":" · plateau"):""}</td>
       <td>${fmtTB(r.stored)}</td><td>${r.count}</td>
       <td>${fmtMoney(r.dayCost)}</td><td>${fmtMoney(r.cum)}</td>`;
     tb.appendChild(tr);
   });
 
   // model note
+  const drainMsg = sim.stopOn
+    ? ` <b>Backups stop after day ${sim.stopDay}</b>: no new points are made, the rest expire, and storage drains to <b>$0 by day ${sim.stopDay + R}</b>.`
+    : ``;
   $("modelNote").innerHTML = flat
-    ? `<b>Single-snapshot mode.</b> Storage stays flat at ${fmtTB(S0)} for ${R} days, then the snapshot expires and cost stops. Each day costs the same ${fmtMoney(day0cost)}.`
-    : `<b>Incremental mode.</b> Storage climbs by ${fmtTB(delta)}/day until day ${R}, then holds near ${fmtTB(peak)} as old deltas expire. Rows highlighted at day 0 (first full), day 7, and day ${R} (first expiry).`;
+    ? `<b>No-change mode (0% daily change).</b> Nothing new is stored, so storage holds flat at ${fmtTB(S0)} — one full copy — costing the same ${fmtMoney(day0cost)} each day. It stays there for the ${R}-day retention, then the backup expires and cost drops to <b>$0</b>. (A recurring plan that keeps re-backing-up unchanged data just holds ${fmtTB(S0)} indefinitely — extend retention to model that.)`
+    : `<b>Incremental mode (S3 / EBS).</b> Day 0 is a <b>full</b> backup (${fmtTB(S0)}); each later day stores only the <b>${fmtTB(delta)}</b> that changed. The full baseline <b>persists</b> while the plan runs (newer points reference its base data), and daily deltas roll off after ${R} days, so storage plateaus at ~${fmtTB(peak)} (full + ${R} deltas).${drainMsg} For S3, restore, GET/LIST request and EventBridge charges are billed on top, and objects under 128 KB are billed as 128 KB.`;
 
   drawChart(rows, R);
 }
@@ -567,7 +587,7 @@ function onResChange(){
 }
 sel.addEventListener("change", ()=>{onResChange(); render();});
 $("change").addEventListener("input", ()=>{ $("changeVal").textContent=(parseFloat($("change").value)).toFixed(1)+"%"; render();});
-["rate","size","sizeUnit","retention","daysInMonth","growth","growthUnit","coldOn","coldAfter","coldRate","copyOn","copyTransfer","copyStore"].forEach(id=>{
+["rate","size","sizeUnit","retention","daysInMonth","growth","growthUnit","coldOn","coldAfter","coldRate","copyOn","copyTransfer","copyStore","stopOn","stopDay"].forEach(id=>{
   $(id).addEventListener("input", render);
 });
 document.querySelectorAll("#tbSeg button").forEach(b=> b.addEventListener("click",()=>{
@@ -584,6 +604,7 @@ document.querySelectorAll("#vaultSeg button").forEach(b=> b.addEventListener("cl
 document.querySelectorAll(".pill").forEach(p=> p.addEventListener("click",()=>{ $("rate").value=p.dataset.region; render(); }));
 $("coldOn").addEventListener("change",()=> $("coldRow").style.opacity=$("coldOn").checked?1:.5);
 $("copyOn").addEventListener("change",()=> $("copyRow").style.opacity=$("copyOn").checked?1:.5);
+$("stopOn").addEventListener("change",()=> $("stopRow").style.opacity=$("stopOn").checked?1:.5);
 window.addEventListener("resize", render);
 
 onResChange(); render();
