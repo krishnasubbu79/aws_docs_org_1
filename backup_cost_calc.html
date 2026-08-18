@@ -112,7 +112,16 @@
         </div>
 
         <div class="field">
-          <label for="rate">Warm storage rate — $ / GB-month <span title="Editable. Defaults are US East (N. Virginia). Other regions run higher.">ⓘ</span></label>
+          <label>Vault type</label>
+          <div class="seg" id="vaultSeg">
+            <button data-vault="standard" class="on">Standard</button>
+            <button data-vault="lag">Air-gapped (LAG)</button>
+          </div>
+          <div class="hint">Air-gapped (LAG) rates are applied <b>only where AWS publishes one</b> — EBS &amp; EFS $0.0575, Aurora $0.0242. Services without a published LAG rate <b>keep their standard rate</b> (no assumed premium). Override any rate above as needed.</div>
+        </div>
+
+        <div class="field">
+          <label for="rate">Storage rate — $ / GB-month <span id="rateType">(standard)</span> <span title="Editable. Defaults are US East (N. Virginia). Other regions run higher.">ⓘ</span></label>
           <input type="number" id="rate" step="0.001" min="0" value="0.05">
           <div class="pillrow">
             <span class="pill" data-region="0.05">us-east-1 ($0.05)</span>
@@ -123,7 +132,7 @@
         </div>
 
         <div class="field">
-          <label>Initial backup size (first full snapshot)</label>
+          <label id="sizeLabel">Initial backup size (first full snapshot)</label>
           <div class="row">
             <input type="number" id="size" min="0" step="1" value="100">
             <select id="sizeUnit" style="flex:0 0 90px">
@@ -143,10 +152,23 @@
           <div class="hint">AWS meters snapshot storage in binary GB (GiB). Keep <b>1024</b> unless you're matching a decimal quote.</div>
         </div>
 
-        <div class="field">
+        <div class="field" id="pctField">
           <label for="change">Daily change rate — <span id="changeVal">0%</span> of data / day</label>
           <input type="range" id="change" min="0" max="20" step="0.5" value="0">
           <div class="hint">How much data changes each day, added as an <b>incremental</b> backup. Set <b>0%</b> for a single fresh snapshot you just hold (your 100 TB → 7 days case).</div>
+        </div>
+
+        <div class="field" id="growthField" style="display:none">
+          <label>Daily DB growth — fixed value / day</label>
+          <div class="row">
+            <input type="number" id="growth" min="0" step="10" value="100">
+            <select id="growthUnit" style="flex:0 0 90px">
+              <option value="TB">TB</option>
+              <option value="GB" selected>GB</option>
+              <option value="PB">PB</option>
+            </select>
+          </div>
+          <div class="hint"><b>Cross-account full block copy.</b> DB grows by this fixed amount daily (arithmetic progression). Each day a <b>full copy of the whole current DB</b> — not just the delta — is written to the LAG vault, and the vault keeps every copy. Vault = running sum of full daily copies until retention releases it.</div>
         </div>
 
         <div class="field">
@@ -213,7 +235,7 @@
         <div class="bd">
           <div class="tablescroll">
             <table>
-              <thead><tr><th>Day</th><th>Stored</th><th>Snapshots</th><th>Cost that day</th><th>Cumulative</th></tr></thead>
+              <thead><tr id="theadRow"><th>Day</th><th>Stored</th><th>Snapshots</th><th>Cost that day</th><th>Cumulative</th></tr></thead>
               <tbody id="tbody"></tbody>
             </table>
           </div>
@@ -229,16 +251,17 @@
 </div>
 
 <script>
+// lag = AWS-published/validated air-gapped rate; null = no published LAG rate (fall back to standard)
 const RES = [
-  {id:"ebs",   name:"Amazon EBS snapshot",  rate:0.05,  hint:"Incremental block-level snapshots. First is full, rest store changed blocks."},
-  {id:"efs",   name:"Amazon EFS",           rate:0.05,  hint:"Warm $0.05, cold $0.01 per GB-month."},
-  {id:"rds",   name:"Amazon RDS",           rate:0.095, hint:"$0.095/GB-mo beyond the free backup equal to your DB size."},
-  {id:"aurora",name:"Amazon Aurora",        rate:0.021, hint:"Continuous/snapshot backup storage."},
-  {id:"ddb",   name:"Amazon DynamoDB",      rate:0.10,  hint:"On-demand backup warm $0.10, cold ~$0.03 per GB-month."},
-  {id:"s3",    name:"Amazon S3",            rate:0.05,  hint:"Plus per-object request charges, not modeled."},
-  {id:"fsx",   name:"Amazon FSx",           rate:0.05,  hint:"Warm storage per GB-month."},
-  {id:"vmware",name:"VMware / on-prem",     rate:0.05,  hint:"Warm $0.05, cold $0.01 per GB-month."},
-  {id:"custom",name:"Custom / other",       rate:0.05,  hint:"Enter your own rate below."}
+  {id:"ebs",   name:"Amazon EBS snapshot",  rate:0.05,  lag:0.0575, hint:"Incremental snapshots. LAG $0.0575 (AWS published pricing example)."},
+  {id:"efs",   name:"Amazon EFS",           rate:0.05,  lag:0.0575, hint:"Warm $0.05; LAG $0.0575 (AWS published pricing example)."},
+  {id:"rds",   name:"Amazon RDS",           rate:0.095, lag:null,   hint:"$0.095/GB-mo. No published LAG rate — LAG keeps the standard rate."},
+  {id:"aurora",name:"Amazon Aurora (cross-acct full copy)", rate:0.021, lag:0.0242, hint:"Full block copy daily; vault accumulates full copies. Standard $0.021; LAG $0.0242."},
+  {id:"ddb",   name:"Amazon DynamoDB",      rate:0.10,  lag:null,   hint:"Warm $0.10. No published LAG rate — LAG keeps the standard rate."},
+  {id:"s3",    name:"Amazon S3",            rate:0.05,  lag:null,   hint:"$0.05/GB-mo + request charges. No published LAG rate — LAG keeps standard."},
+  {id:"fsx",   name:"Amazon FSx",           rate:0.05,  lag:null,   hint:"Warm $0.05. No published LAG rate — LAG keeps the standard rate."},
+  {id:"vmware",name:"VMware / on-prem",     rate:0.05,  lag:null,   hint:"Warm $0.05. No published LAG rate — LAG keeps the standard rate."},
+  {id:"custom",name:"Custom / other",       rate:0.05,  lag:null,   hint:"Enter your own rate below."}
 ];
 
 const $ = id => document.getElementById(id);
@@ -271,13 +294,42 @@ function initialGB(){
   return v*gbPerTB; // TB
 }
 
+function growthGB(){
+  const v = parseFloat($("growth").value)||0;
+  const u = $("growthUnit").value;
+  if(u==="PB") return v*gbPerTB*1024;
+  if(u==="GB") return v;
+  return v*gbPerTB; // TB
+}
+
 // Build the storage/cost time series
 function simulate(){
   const S0 = initialGB();
   const rate = parseFloat($("rate").value)||0;
-  const chg = (parseFloat($("change").value)||0)/100;
   const R = Math.max(1, Math.round(parseFloat($("retention").value)||1));
   const dim = Math.max(1, parseFloat($("daysInMonth").value)||30);
+  const isAurora = sel.value==="aurora";
+
+  // ---- Aurora cross-account LAG vault: full block copy daily, cumulative, released after retention ----
+  if(isAurora){
+    const G = growthGB();                                   // fixed daily DB growth
+    const horizon = Math.min(180, Math.max(30, R+5));
+    const rows=[]; let cum=0, cumDiff=0, vault=0;
+    for(let day=1; day<=horizon; day++){
+      const dbSize = S0 + (day-1)*G;                        // DB grows by fixed increment
+      const copy   = (day<=R) ? dbSize : 0;                 // FULL block copy of current DB
+      if(day<=R) vault += copy;                             // vault keeps every full copy
+      const stored     = (day<=R) ? vault : 0;              // LAG vault storage (released after R)
+      const diffStored = (day<=R) ? dbSize : 0;             // hypothetical: if only differential were copied
+      const dayCost     = stored*rate/dim;
+      const dayCostDiff = diffStored*rate/dim;
+      cum += dayCost; cumDiff += dayCostDiff;
+      rows.push({day, stored, dbSize, copy, diffStored, count:(day<=R?day:0), dayCost, dayCostDiff, cum, cumDiff, warm:stored, cold:0});
+    }
+    return {rows, S0, rate, delta:G, R, dim, chg:0, horizon, isAurora:true, G};
+  }
+
+  const chg = (parseFloat($("change").value)||0)/100;
   const delta = S0*chg;
 
   const coldOn = $("coldOn").checked;
@@ -330,6 +382,67 @@ function simulate(){
 function render(){
   const sim = simulate();
   const {rows, S0, rate, delta, R, dim, chg} = sim;
+
+  // ---- Aurora cross-account LAG vault render ----
+  if(sim.isAurora){
+    const G = sim.G;
+    const monthDays = Math.min(30, rows.length);
+    const monthRows = rows.filter(r=>r.day<=monthDays);
+    const cycleRows = rows.filter(r=>r.day<=R);
+    const day1        = rows[0].dayCost;
+    const cycleCost   = cycleRows.reduce((a,r)=>a+r.dayCost,0);
+    const monthCost   = monthRows.reduce((a,r)=>a+r.dayCost,0);
+    const monthDiff   = monthRows.reduce((a,r)=>a+r.dayCostDiff,0);
+    const lastCycle   = cycleRows[cycleRows.length-1];
+    const peakVault   = lastCycle.stored;               // vault at day R
+    const vaultLbl    = monthRows[monthRows.length-1].stored;  // vault at day 30
+    const diffLbl     = monthRows[monthRows.length-1].diffStored;
+    const penalty     = monthDiff>0 ? monthCost/monthDiff : 0;
+
+    const flatMonth = vaultLbl * rate;    // day-30 accumulated storage × rate (no proration)
+    const flatPeak  = peakVault * rate;   // day-R peak storage × rate
+
+    // relabel stat tiles for this mode
+    const setK=(id,txt)=>document.querySelector("#"+id).closest(".stat").querySelector(".k").textContent=txt;
+    setK("sDay","Cost / day (day 1)"); setK("sTotal","Month — flat (storage×rate)");
+    setK("sMonth","Month — prorated (AWS)"); setK("sPeak","Vault @ day "+monthDays);
+
+    $("headline").innerHTML =
+      `Air-gapped LAG vault — ${fmtTB(S0)} DB + ${fmtTB(G)}/day, <b>full block copy</b>, ${R}-day retention. Month: <b>${fmtMoney(flatMonth)}</b> flat / <b>${fmtMoney(monthCost)}</b> prorated <small>@ $${rate}/GB-mo</small>`;
+
+    $("sDay").textContent = fmtMoney(day1);
+    $("sDaySub").textContent = `day 1 vault ${fmtTB(S0)}`;
+    $("sTotal").textContent = fmtMoney(flatMonth);
+    $("sTotalSub").textContent = `day-${monthDays} vault × rate`;
+    $("sMonth").textContent = fmtMoney(monthCost);
+    $("sMonthSub").textContent = `avg storage × rate`;
+    $("sPeak").textContent = fmtTB(vaultLbl);
+    $("sPeakSub").textContent = `peak d${R}: ${fmtTB(peakVault)}`;
+
+    // rebuild table header to mirror the source table
+    $("theadRow").innerHTML = `<th>Day</th><th>DB size</th><th>Full copy</th><th>LAG vault</th><th>Cost that day</th><th>Cumulative</th>`;
+    const tb = $("tbody"); tb.innerHTML="";
+    rows.forEach(r=>{
+      const tr=document.createElement("tr");
+      if(r.day===1 || r.day===monthDays || r.day===R || r.day===R+1) tr.className="milestone";
+      const tag = r.day===1?" · start" : r.day===R?" · peak" : r.day===R+1?" · released":"";
+      tr.innerHTML = `<td>Day ${r.day}${tag}</td><td>${fmtTB(r.dbSize)}</td><td>${r.copy?fmtTB(r.copy):"—"}</td>
+        <td>${fmtTB(r.stored)}</td><td>${fmtMoney(r.dayCost)}</td><td>${fmtMoney(r.cum)}</td>`;
+      tb.appendChild(tr);
+    });
+
+    $("modelNote").innerHTML =
+      `<b>Air-gapped LAG vault — full block copy.</b> DB grows ${fmtTB(G)}/day, but replication copies the <b>entire DB</b> to the vault every day (not the delta), so the vault is the running sum of full copies: day ${monthDays} = ${fmtTB(vaultLbl)}, peak day ${R} = ${fmtTB(peakVault)} — <b>${penalty.toFixed(1)}×</b> a differential copy (${fmtTB(diffLbl)}). <b>Two monthly figures:</b> <b>flat</b> = end-of-month storage × rate (${fmtMoney(flatMonth)}, conservative for budgeting); <b>prorated</b> = average storage × rate (${fmtMoney(monthCost)}, the real AWS invoice for a vault still ramping). Full ${R}-day cycle prorated = ${fmtMoney(cycleCost)} (flat at peak = ${fmtMoney(flatPeak)}), then released to $0. Rate $${rate}/GB-month (${vaultType==='lag'?'air-gapped LAG vault':'standard warm'}).`;
+
+    drawChart(rows, R);
+    return;
+  }
+
+  // reset table + stat labels for incremental modes
+  $("theadRow").innerHTML = `<th>Day</th><th>Stored</th><th>Snapshots</th><th>Cost that day</th><th>Cumulative</th>`;
+  {const setK=(id,txt)=>document.querySelector("#"+id).closest(".stat").querySelector(".k").textContent=txt;
+   setK("sDay","Cost / day (initial)"); setK("sTotal","Total over retention");
+   setK("sMonth","Monthly (steady state)"); setK("sPeak","Peak storage");}
 
   // headline
   const held = rows.filter(r=>r.day>=1 && r.day<=R);
@@ -409,16 +522,18 @@ function drawChart(rows, R){
     ctx.textAlign="left"; ctx.fillStyle=cAccent;
     ctx.fillText((maxStore*g/4/gbPerTB).toFixed(maxStore/gbPerTB<10?1:0)+"TB", W-padR+8, yy+4);
   }
+  const idxOf = d => rows.findIndex(r=>r.day===d);
   // retention edge marker
-  if(R < n){
-    const xr=x(R); ctx.strokeStyle=cMut; ctx.setLineDash([4,4]); ctx.globalAlpha=.7;
+  const ri = idxOf(R);
+  if(ri>=0 && ri<n-1){
+    const xr=x(ri); ctx.strokeStyle=cMut; ctx.setLineDash([4,4]); ctx.globalAlpha=.7;
     ctx.beginPath(); ctx.moveTo(xr,padT); ctx.lineTo(xr,padT+plotH); ctx.stroke();
     ctx.setLineDash([]); ctx.globalAlpha=1;
     ctx.fillStyle=cMut; ctx.textAlign="center"; ctx.fillText("day "+R, xr, padT+plotH+18);
   }
   ctx.fillStyle=cMut; ctx.textAlign="center";
-  ctx.fillText("day 0", x(0)+6, padT+plotH+18);
-  ctx.fillText("day "+(n-1), x(n-1)-6, padT+plotH+18);
+  ctx.fillText("day "+rows[0].day, x(0)+6, padT+plotH+18);
+  ctx.fillText("day "+rows[n-1].day, x(n-1)-6, padT+plotH+18);
 
   // stored area (accent)
   ctx.beginPath(); ctx.moveTo(x(0),yStore(rows[0].stored));
@@ -431,23 +546,40 @@ function drawChart(rows, R){
   // cumulative cost line (accent2)
   ctx.beginPath(); rows.forEach((r,i)=> i?ctx.lineTo(x(i),yCum(r.cum)):ctx.moveTo(x(i),yCum(r.cum)));
   ctx.strokeStyle=cAccent2; ctx.lineWidth=2.5; ctx.stroke();
-  // dots at day 7 & R
-  [7,R].forEach(d=>{ if(d<n){ ctx.beginPath(); ctx.arc(x(d),yCum(rows[d].cum),3.5,0,7); ctx.fillStyle=cAccent2; ctx.fill(); }});
+  // dots at day 7 & R (by day value, not index)
+  [7,R].forEach(d=>{ const i=idxOf(d); if(i>=0){ ctx.beginPath(); ctx.arc(x(i),yCum(rows[i].cum),3.5,0,7); ctx.fillStyle=cAccent2; ctx.fill(); }});
 }
 
 // ---- wiring ----
+let vaultType = "standard";
+const rateFor = r => (vaultType==="lag" && r.lag!=null) ? r.lag : r.rate;
+const rateTag = r => vaultType!=="lag" ? "(standard)" : (r.lag!=null ? "(air-gapped LAG)" : "(no LAG rate — standard)");
+let prevAurora=false;
 function onResChange(){
   const r=RES.find(x=>x.id===sel.value);
-  $("rate").value=r.rate; $("resHint").textContent=r.hint;
+  $("rate").value=rateFor(r); $("resHint").textContent=r.hint;
+  $("rateType").textContent = rateTag(r);
+  const isAurora = sel.value==="aurora";
+  $("pctField").style.display   = isAurora?"none":"block";
+  $("growthField").style.display= isAurora?"block":"none";
+  $("sizeLabel").textContent    = isAurora?"Baseline size (day 1)":"Initial backup size (first full snapshot)";
+  if(isAurora!==prevAurora){ $("retention").value = isAurora?35:7; prevAurora=isAurora; }
 }
 sel.addEventListener("change", ()=>{onResChange(); render();});
 $("change").addEventListener("input", ()=>{ $("changeVal").textContent=(parseFloat($("change").value)).toFixed(1)+"%"; render();});
-["rate","size","sizeUnit","retention","daysInMonth","coldOn","coldAfter","coldRate","copyOn","copyTransfer","copyStore"].forEach(id=>{
+["rate","size","sizeUnit","retention","daysInMonth","growth","growthUnit","coldOn","coldAfter","coldRate","copyOn","copyTransfer","copyStore"].forEach(id=>{
   $(id).addEventListener("input", render);
 });
 document.querySelectorAll("#tbSeg button").forEach(b=> b.addEventListener("click",()=>{
   document.querySelectorAll("#tbSeg button").forEach(x=>x.classList.remove("on"));
   b.classList.add("on"); gbPerTB=parseInt(b.dataset.gb); render();
+}));
+document.querySelectorAll("#vaultSeg button").forEach(b=> b.addEventListener("click",()=>{
+  document.querySelectorAll("#vaultSeg button").forEach(x=>x.classList.remove("on"));
+  b.classList.add("on"); vaultType=b.dataset.vault;
+  const r=RES.find(x=>x.id===sel.value); $("rate").value=rateFor(r);
+  $("rateType").textContent = rateTag(r);
+  render();
 }));
 document.querySelectorAll(".pill").forEach(p=> p.addEventListener("click",()=>{ $("rate").value=p.dataset.region; render(); }));
 $("coldOn").addEventListener("change",()=> $("coldRow").style.opacity=$("coldOn").checked?1:.5);
